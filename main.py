@@ -1,124 +1,151 @@
 import os
-import json
+import time
 import feedparser
 import google.generativeai as genai
-from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from google.api_core.exceptions import ResourceExhausted
 
-# Konfigurasi Sumber Berita dan Blog
-RSS_URL = "https://www.antaranews.com/rss/olahraga.xml"
-BLOG_ID = "657637354060844621" # ID Blog Anda
+# ==========================================
+# 1. KONFIGURASI KREDENSIAL & API
+# ==========================================
+# Konfigurasi Gemini API (Diambil dari GitHub Secrets)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-3.5-flash')
 
-def list_model_names():
-    """Fungsi pembantu untuk mengecek model yang aktif jika terjadi error"""
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(f"Model aktif ditemukan: {m.name}")
-    except Exception as e:
-        pass
+# Konfigurasi Blogger API
+BLOG_ID = os.environ.get("BLOG_ID") # Pastikan BLOG_ID ada di GitHub Secrets
+SCOPES = ['https://www.googleapis.com/auth/blogger']
+SERVICE_ACCOUNT_FILE = 'credentials.json' # Pastikan file ini ada atau di-generate via GitHub Actions
 
-def ambil_gambar_dari_feed(entry):
-    """Fungsi pembantu untuk mendeteksi url gambar dari RSS Feed Antara"""
-    if 'enclosures' in entry and len(entry.enclosures) > 0:
-        for enc in entry.enclosures:
-            if enc.get('type', '').startswith('image/'):
-                return enc.get('url')
-    if 'links' in entry:
-        for link in entry.links:
-            if link.get('type', '').startswith('image/'):
-                return link.get('href')
-    return None
+# Otentikasi Blogger API
+try:
+    credentials = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    blogger_service = build('blogger', 'v3', credentials=credentials)
+except Exception as e:
+    print(f"Gagal melakukan otentikasi Blogger API: {e}")
+    blogger_service = None
 
-def main():
-    print("Memulai proses Auto-Blogging Olahraga Teroptimasi SEO...")
+# ==========================================
+# 2. DAFTAR SUMBER RSS (BBC & FOX SPORTS)
+# ==========================================
+RSS_FEEDS = [
+    "http://feeds.bbci.co.uk/sport/rss.xml",
+    "http://feeds.bbci.co.uk/sport/football/rss.xml",
+    "https://api.foxsports.com/v1/rss?partnerKey=zBaFxRyGKCfxBagJG9b8pqLyndmvo7UU",
+    "https://sports.yahoo.com/rss/"
+]
 
-    # 1. Autentikasi Gemini AI
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    
-    # 2. Autentikasi Blogger API
-    token_info = json.loads(os.environ["BLOGGER_TOKEN"])
-    creds = Credentials.from_authorized_user_info(token_info)
-    blogger_service = build('blogger', 'v3', credentials=creds)
-    
-    # 3. Ambil Berita Olahraga Terbaru dari RSS
-    feed = feedparser.parse(RSS_URL)
-    if not feed.entries:
-        print("Tidak ada berita olahraga ditemukan di RSS saat ini.")
-        return
+# ==========================================
+# 3. FUNGSI-FUNGSI UTAMA
+# ==========================================
+def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=2):
+    """Mengambil berita terbaru dari daftar URL RSS."""
+    semua_berita = []
+    for url in rss_urls:
+        print(f"Membaca RSS dari: {url}")
+        feed = feedparser.parse(url)
         
-    berita_terbaru = feed.entries[0]
-    judul_asli = berita_terbaru.title
-    link_asli = berita_terbaru.link
-    ringkasan_asli = berita_terbaru.summary
-    
-    # Deteksi gambar asli berita
-    url_gambar = ambil_gambar_dari_feed(berita_terbaru)
-    
-    print(f"Ditemukan berita asli: {judul_asli}")
-    
-    # Kustomisasi Tag Gambar HTML ramah SEO dengan alt-text dan lazy loading
-    tag_gambar_html = f"<p align='center'><img src='{url_gambar}' alt='Analisis Berita {judul_asli}' title='{judul_asli}' loading='lazy' style='max-width:100%; height:auto; border-radius:8px;'/></p><br/>" if url_gambar else ""
+        # Ambil beberapa berita teratas dari setiap sumber
+        for entry in feed.entries[:limit_per_sumber]:
+            berita = {
+                'judul': entry.title,
+                'link': entry.link,
+                'deskripsi': entry.get('summary', entry.get('description', ''))
+            }
+            semua_berita.append(berita)
+    return semua_berita
 
-    # 4. Tulis Ulang & Kategori Otomatis Menggunakan Gemini AI dengan standar SEO Ketat
+def tulis_artikel_dengan_gemini(berita):
+    """Menggunakan Gemini untuk menulis ulang artikel (Menghindari Plagiasi & SEO Friendly)."""
     prompt = f"""
-    Kamu adalah pakar SEO dan jurnalis olahraga profesional senior. Tulis ulang berita olahraga di bawah ini menjadi sebuah artikel blog yang sangat menarik, mendalam, ramah SEO, dan berpotensi peringkat 1 di Google.
+    Bertindaklah sebagai jurnalis olahraga profesional. 
+    Tulis ulang berita olahraga berikut ke dalam bahasa Indonesia yang menarik, informatif, dan SEO friendly.
     
-    Aturan SEO yang wajib kamu ikuti:
-    1. Buat judul baru yang memicu rasa penasaran (Clickbait yang aman) dan mengandung kata kunci utama dari berita.
-    2. Struktur artikel harus lengkap menggunakan sub-heading menarik dengan tag <h2> dan <h3> secara terstruktur.
-    3. Gunakan tag <p> untuk paragraf. Tebalkan kata kunci penting menggunakan tag <strong> secara natural.
-    4. Artikel harus mengalir, menggunakan bahasa Indonesia yang santai, seru, mudah dipahami, dan tidak terlihat kaku seperti bot.
-
-    WAJIB BERIKAN JAWABAN DENGAN FORMAT STRUKTUR BERIKUT:
-    LABEL: (Isi hanya dengan 1 nama cabang olahraga utama dari berita ini, misal: Sepakbola, Bulutangkis, MotoGP, Basket, dll)
-    JUDUL: (Isi dengan judul baru hasil optimasi SEO Anda tanpa tanda bintang atau tag h1)
-    KONTEN: (Sisipkan teks gambar ini di baris pertama tanpa modifikasi: {tag_gambar_html} Setelah itu lanjutkan dengan artikel HTML penuh buatanmu yang kaya akan tag <h2>, <h3>, <strong>, dan <p>. Di baris paling akhir, tutup dengan kode: <p><em>Sumber rujukan resmi: <a href='{link_asli}' rel='nofollow'>Antara News</a></em></p>)
+    Data Berita Asli:
+    Judul: {berita['judul']}
+    Deskripsi: {berita['deskripsi']}
     
-    Berita Asli yang Harus Diolah:
-    Judul: {judul_asli}
-    Ringkasan: {ringkasan_asli}
+    Syarat penulisan:
+    1. Buat Judul baru yang clickbait tapi tidak menyesatkan.
+    2. Tulis isi artikel minimal 3 paragraf.
+    3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>) agar siap diposting di Blogger.
+    4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
+    5. Berikan kredit sumber berita di akhir artikel (Sumber: {berita['link']}).
     """
     
-    print("Mengirim instruksi optimasi SEO ke Gemini...")
-    model = genai.GenerativeModel('gemini-3.5-flash')
-    response = model.generate_content(prompt)
-    hasil_ai = response.text.strip()
-    
-    # 5. Memisahkan Label, Judul Baru, dan Isi Konten
-    try:
-        label_start = hasil_ai.find("LABEL:") + len("LABEL:")
-        judul_start = hasil_ai.find("JUDUL:")
-        konten_start = hasil_ai.find("KONTEN:")
+    # Mekanisme Retry (Penanganan Error 429 Quota Exceeded)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except ResourceExhausted:
+            wait_time = (attempt + 1) * 30
+            print(f"⚠️ Limit API Gemini tercapai (Error 429). Menunggu {wait_time} detik sebelum mencoba lagi...")
+            time.sleep(wait_time)
+        except Exception as e:
+            print(f"Error saat memanggil Gemini: {e}")
+            return None
+            
+    print("Gagal membuat artikel setelah beberapa kali percobaan akibat limit API.")
+    return None
+
+def posting_ke_blogger(judul, konten_html):
+    """Mengunggah artikel yang sudah jadi ke Blogspot."""
+    if not blogger_service:
+        print("Blogger service tidak tersedia. Melewati proses posting.")
+        return
         
-        label_baru = hasil_ai[label_start:judul_start].strip()
-        judul_baru = hasil_ai[judul_start + len("JUDUL:"):konten_start].strip()
-        isi_konten = hasil_ai[konten_start + len("KONTEN:"):].strip()
-        
-        # Pembersihan tag ilegal agar tidak merusak layout Blogger
-        label_baru = label_baru.replace('[', '').replace(']', '').replace('*', '')
-        judul_baru = judul_baru.replace('[', '').replace(']', '').replace('**', '').replace('<h1>', '').replace('</h1>', '')
-        
-    except Exception as e:
-        print("Format AI meleset, mengaktifkan mode pemulihan format.")
-        label_baru = "Olahraga"
-        judul_baru = judul_asli
-        isi_konten = tag_gambar_html + hasil_ai 
-    
-    # 6. Susun Data untuk Diposting ke Blogger
-    body = {
-        "kind": "blogger#post",
-        "title": judul_baru,
-        "content": isi_konten,
-        "labels": [label_baru]
+    post_body = {
+        'title': judul,
+        'content': konten_html,
+        'labels': ['Berita Olahraga', 'Auto Update']
     }
     
-    # 7. Eksekusi Pengiriman ke Blogger
-    print("Mengunggah artikel teroptimasi ke Blogger...")
-    posts = blogger_service.posts()
-    res = posts.insert(blogId=BLOG_ID, body=body, isDraft=False).execute()
+    try:
+        request = blogger_service.posts().insert(blogId=BLOG_ID, body=post_body)
+        response = request.execute()
+        print(f"✅ Sukses memposting: {response.get('url')}")
+    except Exception as e:
+        print(f"❌ Gagal memposting ke Blogger: {e}")
+
+# ==========================================
+# 4. EKSEKUSI PROGRAM (MAIN)
+# ==========================================
+def main():
+    print("=== Memulai Auto-Blogger Olahraga ===")
     
-    print(f"SUKSES BESAR! Artikel SEO berhasil terbit dengan kategori '{label_baru}'. URL: {res.get('url')}")
+    # 1. Ambil berita dari RSS Fox Sports & BBC
+    daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=2)
+    print(f"Ditemukan {len(daftar_berita)} berita untuk diproses.")
+    
+    # 2. Proses dan Posting satu per satu
+    for index, berita in enumerate(daftar_berita):
+        print(f"\n[{index + 1}/{len(daftar_berita)}] Memproses berita: {berita['judul']}")
+        
+        # Ekstrak judul baru dan konten dari output Gemini
+        hasil_gemini = tulis_artikel_dengan_gemini(berita)
+        
+        if hasil_gemini:
+            # Mengakali pemisahan Judul dan Konten dari output HTML Gemini
+            # Asumsi: Gemini memberikan Judul di baris pertama atau di dalam <h1>/<h2>
+            baris_teks = hasil_gemini.split('\n')
+            judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('**', '').strip()
+            konten_artikel = '\n'.join(baris_teks[1:])
+            
+            # Posting ke blog
+            posting_ke_blogger(judul_baru, konten_artikel)
+            
+            # FITUR ANTI-LIMIT: Jeda wajib agar API Gemini gratisan tidak error 429
+            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya (Mencegah Limit API)...")
+            time.sleep(20)
+        else:
+            print(f"Melewati artikel: {berita['judul']}")
+
+    print("\n=== Proses Auto-Blogger Selesai ===")
 
 if __name__ == '__main__':
     main()
