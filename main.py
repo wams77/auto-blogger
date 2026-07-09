@@ -34,7 +34,7 @@ def main():
     print(f"Ditemukan berita asli: {judul_asli}")
     
     # 4. Tulis Ulang Menggunakan Gemini AI
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3.5-flash')
     prompt = f"""
     Kamu adalah blogger profesional. Tulis ulang berita berikut menjadi artikel blog yang unik, santai, namun informatif.
     Ubah judulnya menjadi lebih menarik (jangan tulis kata 'Judul:').
