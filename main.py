@@ -1,29 +1,29 @@
 import os
 import json
 import feedparser
-import google.generativeai as genai
+from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# Konfigurasi
-RSS_URL = "https://www.antaranews.com/rss/terkini.xml" 
+# Konfigurasi Sumber Berita dan Blog
+RSS_URL = "https://www.antaranews.com/rss/olahraga.xml" # RSS Khusus Olahraga
 BLOG_ID = "657637354060844621" # ID Blog Anda
 
 def main():
-    print("Memulai proses Auto-Blogging...")
+    print("Memulai proses Auto-Blogging Olahraga...")
 
     # 1. Autentikasi Gemini AI
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     
     # 2. Autentikasi Blogger API
     token_info = json.loads(os.environ["BLOGGER_TOKEN"])
     creds = Credentials.from_authorized_user_info(token_info)
     blogger_service = build('blogger', 'v3', credentials=creds)
     
-    # 3. Ambil Berita Terbaru dari RSS
+    # 3. Ambil Berita Olahraga Terbaru dari RSS
     feed = feedparser.parse(RSS_URL)
     if not feed.entries:
-        print("Tidak ada berita ditemukan di RSS.")
+        print("Tidak ada berita olahraga ditemukan di RSS saat ini.")
         return
         
     berita_terbaru = feed.entries[0]
@@ -33,41 +33,63 @@ def main():
     
     print(f"Ditemukan berita asli: {judul_asli}")
     
-    # 4. Tulis Ulang Menggunakan Gemini AI
-    model = genai.GenerativeModel('gemini-3.5-flash')
+    # 4. Tulis Ulang & Kategori Otomatis Menggunakan Gemini AI
     prompt = f"""
-    Kamu adalah blogger profesional. Tulis ulang berita berikut menjadi artikel blog yang unik, santai, namun informatif.
-    Ubah judulnya menjadi lebih menarik (jangan tulis kata 'Judul:').
-    Format isi artikel menggunakan tag HTML dasar (gunakan tag <p> untuk paragraf).
-    Di akhir artikel, tambahkan kalimat: "<p><em>Sumber: <a href='{link_asli}'>Link Artikel Asli</a></em></p>"
+    Kamu adalah jurnalis dan blogger olahraga profesional yang antusias. Tulis ulang berita olahraga berikut menjadi artikel blog yang seru, informatif, dan menggebu-gebu. Gunakan istilah olahraga yang tepat.
+
+    WAJIB BERIKAN JAWABAN DENGAN FORMAT PERSIS SEPERTI DI BAWAH INI:
+    LABEL: (Isi dengan 1 nama cabang olahraga utama dari berita ini, misal: Sepakbola, Bulutangkis, MotoGP, Basket, dll)
+    JUDUL: (Isi dengan judul baru yang bombastis dan menarik)
+    KONTEN: (Isi dengan artikel lengkap berformat HTML menggunakan tag <p>. Di paragraf paling akhir, sertakan kode ini: <p><em>Sumber: <a href='{link_asli}'>Link Artikel Asli</a></em></p>)
     
-    Berikut data beritanya:
-    Judul Asli: {judul_asli}
+    Berita Asli:
+    Judul: {judul_asli}
     Ringkasan: {ringkasan_asli}
     """
     
-    print("Mengirim ke Gemini untuk ditulis ulang...")
-    response = model.generate_content(prompt)
+    print("Mengirim instruksi ke Gemini...")
+    # Menggunakan model Gemini 3.5 Flash terbaru
+    response = client.models.generate_content(
+        model='gemini-3.5-flash',
+        contents=prompt,
+    )
     hasil_ai = response.text.strip()
     
-    # Memisahkan Judul Baru dan Isi Konten
-    # Asumsi baris pertama hasil AI adalah judul
-    baris_teks = hasil_ai.split('\n')
-    judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('**', '').strip()
-    isi_konten = '\n'.join(baris_teks[1:]).strip()
+    # 5. Memisahkan Label, Judul Baru, dan Isi Konten
+    try:
+        # Skrip ini memotong teks dari AI berdasarkan kata kuncinya
+        label_start = hasil_ai.find("LABEL:") + len("LABEL:")
+        judul_start = hasil_ai.find("JUDUL:")
+        konten_start = hasil_ai.find("KONTEN:")
+        
+        label_baru = hasil_ai[label_start:judul_start].strip()
+        judul_baru = hasil_ai[judul_start + len("JUDUL:"):konten_start].strip()
+        isi_konten = hasil_ai[konten_start + len("KONTEN:"):].strip()
+        
+        # Membersihkan simbol yang mungkin tidak sengaja ditambahkan AI
+        label_baru = label_baru.replace('[', '').replace(']', '').replace('*', '')
+        judul_baru = judul_baru.replace('[', '').replace(']', '').replace('**', '').replace('<h1>', '').replace('</h1>', '')
+        
+    except Exception as e:
+        print("Format AI meleset, menggunakan data aman (fallback).")
+        label_baru = "Olahraga"
+        judul_baru = judul_asli
+        isi_konten = hasil_ai 
     
-    # 5. Posting ke Blogger
+    # 6. Susun Data untuk Diposting ke Blogger
     body = {
         "kind": "blogger#post",
         "title": judul_baru,
-        "content": isi_konten
+        "content": isi_konten,
+        "labels": [label_baru] # <--- Di sinilah keajaiban label otomatis terjadi!
     }
     
+    # 7. Eksekusi Pengiriman ke Blogger
     print("Mengunggah artikel ke Blogger...")
     posts = blogger_service.posts()
     res = posts.insert(blogId=BLOG_ID, body=body, isDraft=False).execute()
     
-    print(f"SUKSES! Artikel berhasil diposting. Link: {res.get('url')}")
+    print(f"SUKSES! Artikel diposting dengan Label '{label_baru}'. Link: {res.get('url')}")
 
 if __name__ == '__main__':
     main()
