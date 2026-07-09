@@ -7,8 +7,6 @@ from googleapiclient.discovery import build
 
 # Konfigurasi Sumber Berita dan Blog
 RSS_URL = "https://www.antaranews.com/rss/olahraga.xml"
-RSS_URL = "http://feeds.bbci.co.uk/sport/rss.xml"
-BLOG_ID = "3159636106094545632" # ID Blog Anda
 BLOG_ID = "657637354060844621" # ID Blog Anda
 
 def list_model_names():
