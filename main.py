@@ -49,7 +49,7 @@ def main():
     
     print("Mengirim instruksi ke Gemini...")
     # Menggunakan model 1.5 Flash yang benar
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3.5-flash')
     response = model.generate_content(prompt)
     hasil_ai = response.text.strip()
     
