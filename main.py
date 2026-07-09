@@ -1,19 +1,19 @@
 import os
 import json
 import feedparser
-from google import genai
+import google.generativeai as genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # Konfigurasi Sumber Berita dan Blog
-RSS_URL = "https://www.antaranews.com/rss/olahraga.xml" # RSS Khusus Olahraga
+RSS_URL = "https://www.antaranews.com/rss/olahraga.xml" 
 BLOG_ID = "657637354060844621" # ID Blog Anda
 
 def main():
     print("Memulai proses Auto-Blogging Olahraga...")
 
-    # 1. Autentikasi Gemini AI
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    # 1. Autentikasi Gemini AI (Pustaka Klasik & Stabil)
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
     
     # 2. Autentikasi Blogger API
     token_info = json.loads(os.environ["BLOGGER_TOKEN"])
@@ -48,16 +48,13 @@ def main():
     """
     
     print("Mengirim instruksi ke Gemini...")
-    # Menggunakan model Gemini 3.5 Flash terbaru
-    response = client.models.generate_content(
-        model='gemini-3.5-flash',
-        contents=prompt,
-    )
+    # Menggunakan model 1.5 Flash yang benar
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    response = model.generate_content(prompt)
     hasil_ai = response.text.strip()
     
     # 5. Memisahkan Label, Judul Baru, dan Isi Konten
     try:
-        # Skrip ini memotong teks dari AI berdasarkan kata kuncinya
         label_start = hasil_ai.find("LABEL:") + len("LABEL:")
         judul_start = hasil_ai.find("JUDUL:")
         konten_start = hasil_ai.find("KONTEN:")
@@ -66,7 +63,7 @@ def main():
         judul_baru = hasil_ai[judul_start + len("JUDUL:"):konten_start].strip()
         isi_konten = hasil_ai[konten_start + len("KONTEN:"):].strip()
         
-        # Membersihkan simbol yang mungkin tidak sengaja ditambahkan AI
+        # Membersihkan simbol Markdown
         label_baru = label_baru.replace('[', '').replace(']', '').replace('*', '')
         judul_baru = judul_baru.replace('[', '').replace(']', '').replace('**', '').replace('<h1>', '').replace('</h1>', '')
         
@@ -81,7 +78,7 @@ def main():
         "kind": "blogger#post",
         "title": judul_baru,
         "content": isi_konten,
-        "labels": [label_baru] # <--- Di sinilah keajaiban label otomatis terjadi!
+        "labels": [label_baru]
     }
     
     # 7. Eksekusi Pengiriman ke Blogger
