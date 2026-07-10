@@ -2,9 +2,8 @@ name: Auto Blogger Bot
 
 on:
   schedule:
-    # Berjalan setiap hari pada jam 01:00 UTC (jam 09:00 WITA pagi)
-    - cron: '0 1 * * *'
-  workflow_dispatch: # Mengizinkan Anda menjalankan skrip secara manual dengan tombol
+    - cron: '0 0 * * *' # Berjalan otomatis setiap jam 12 malam UTC (Opsional)
+  workflow_dispatch: # Memungkinkan tombol "Run workflow" manual
 
 jobs:
   build:
@@ -12,18 +11,24 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
-        
+        uses: actions/checkout@v4
+
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          
+          python-version: '3.11' # Menggunakan versi terbaru agar terhindar dari warning
+
       - name: Install Dependencies
         run: pip install -r requirements.txt
-        
+
+      - name: Buat file Token JSON
+        env:
+          BLOGGER_TOKEN: ${{ secrets.BLOGGER_TOKEN }}
+        run: |
+          echo "$BLOGGER_TOKEN" > token.json
+
       - name: Jalankan Script Auto-Blogger
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BLOGGER_TOKEN: ${{ secrets.BLOGGER_TOKEN }}
+          BLOG_ID: ${{ secrets.BLOG_ID }}
         run: python main.py
