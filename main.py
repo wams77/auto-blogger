@@ -10,31 +10,27 @@ import sys
 # ==========================================
 # 1. KONFIGURASI KREDENSIAL & API
 # ==========================================
-# Konfigurasi Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-3.5-flash')
 
-# Konfigurasi Blogger API
-BLOG_ID = os.environ.get("BLOG_ID")
+BLOG_ID = os.environ.get("657637354060844621")
 SCOPES = ['https://www.googleapis.com/auth/blogger']
-TOKEN_FILE = 'token.json' # KEMBALI MENGGUNAKAN TOKEN.JSON MILIK ANDA
+TOKEN_FILE = 'token.json'
 
-# Otentikasi Blogger API menggunakan token.json
 try:
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
         blogger_service = build('blogger', 'v3', credentials=creds)
         print("✅ Otentikasi Blogger berhasil menggunakan token.json")
     else:
-        raise FileNotFoundError(f"File {TOKEN_FILE} tidak ditemukan!")
+        raise FileNotFoundError(f"File {TOKEN_FILE} tidak ditemukan di sistem!")
 except Exception as e:
-    print(f"FATAL ERROR: Gagal melakukan otentikasi Blogger API: {e}")
-    print("Pastikan file token.json tersedia di repository atau GitHub Actions!")
-    sys.exit(1) # Mematikan skrip agar status GitHub Actions menjadi 'Failed' jika token tidak ada
+    print(f"FATAL ERROR: Otentikasi Blogger Gagal: {e}")
+    sys.exit(1)
 
 # ==========================================
-# 2. DAFTAR SUMBER RSS (BBC & FOX SPORTS)
+# 2. DAFTAR SUMBER RSS
 # ==========================================
 RSS_FEEDS = [
     "http://feeds.bbci.co.uk/sport/rss.xml",
@@ -44,10 +40,9 @@ RSS_FEEDS = [
 ]
 
 # ==========================================
-# 3. FUNGSI-FUNGSI UTAMA
+# 3. FUNGSI UTAMA
 # ==========================================
 def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=2):
-    """Mengambil berita terbaru dari daftar URL RSS."""
     semua_berita = []
     for url in rss_urls:
         print(f"Membaca RSS dari: {url}")
@@ -65,7 +60,6 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=2):
     return semua_berita
 
 def tulis_artikel_dengan_gemini(berita):
-    """Menggunakan Gemini untuk menulis ulang artikel."""
     prompt = f"""
     Bertindaklah sebagai jurnalis olahraga profesional. 
     Tulis ulang berita olahraga berikut ke dalam bahasa Indonesia yang menarik, informatif, dan SEO friendly.
@@ -82,14 +76,13 @@ def tulis_artikel_dengan_gemini(berita):
     5. Berikan kredit sumber berita di akhir artikel dengan format HTML link (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
     """
     
-    max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
             response = model.generate_content(prompt)
             return response.text
         except ResourceExhausted:
             wait_time = (attempt + 1) * 30
-            print(f"⚠️ Limit API Gemini tercapai (Error 429). Menunggu {wait_time} detik sebelum mencoba lagi...")
+            print(f"⚠️ Limit API Gemini tercapai. Menunggu {wait_time} detik...")
             time.sleep(wait_time)
         except Exception as e:
             print(f"Error saat memanggil Gemini: {e}")
@@ -99,7 +92,10 @@ def tulis_artikel_dengan_gemini(berita):
     return None
 
 def posting_ke_blogger(judul, konten_html):
-    """Mengunggah artikel yang sudah jadi ke Blogspot."""
+    if not BLOG_ID:
+        print("❌ BLOG_ID tidak ditemukan di GitHub Secrets!")
+        return
+
     post_body = {
         'title': judul,
         'content': konten_html,
@@ -114,7 +110,7 @@ def posting_ke_blogger(judul, konten_html):
         print(f"❌ Gagal memposting ke Blogger: {e}")
 
 # ==========================================
-# 4. EKSEKUSI PROGRAM (MAIN)
+# 4. EKSEKUSI PROGRAM
 # ==========================================
 def main():
     print("=== Memulai Auto-Blogger Olahraga ===")
@@ -129,14 +125,12 @@ def main():
         
         if hasil_gemini:
             baris_teks = hasil_gemini.split('\n')
-            
-            # Membersihkan format markdown yang mungkin tersisa dari output Gemini
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
             posting_ke_blogger(judul_baru, konten_artikel)
             
-            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya...")
+            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya (Anti-Limit)...")
             time.sleep(20)
         else:
             print(f"Melewati artikel: {berita['judul']}")
