@@ -12,7 +12,7 @@ import sys
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3.5-flash')
 
 BLOG_ID = os.environ.get("BLOG_ID")
 SCOPES = ['https://www.googleapis.com/auth/blogger']
@@ -106,7 +106,7 @@ def tulis_artikel_dengan_gemini(berita):
     
     Syarat penulisan:
     1. Buat Judul baru yang clickbait tapi tidak menyesatkan.
-    2. Tulis isi artikel minimal 3 paragraf.
+    2. Tulis isi artikel minimal 6 paragraf.
     3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>) agar siap diposting di Blogger.
     4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
     5. Berikan kredit sumber berita di akhir artikel dengan format HTML link (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
