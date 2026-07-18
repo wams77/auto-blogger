@@ -2,7 +2,7 @@ name: Auto Blogger Bot
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Berjalan otomatis setiap jam 12 malam UTC (Opsional)
+    - cron: '0 1 * * *' # Berjalan otomatis setiap jam 01:00 UTC (jam 09:00 WITA)
   workflow_dispatch: # Memungkinkan tombol "Run workflow" manual
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Menggunakan versi terbaru agar terhindar dari warning
+          python-version: '3.11' 
 
       - name: Install Dependencies
         run: pip install -r requirements.txt
