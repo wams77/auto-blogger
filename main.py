@@ -1,8 +1,10 @@
 import os
 import time
 import feedparser
+import urllib.parse
 import google.generativeai as genai
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from google.api_core.exceptions import ResourceExhausted
 import sys
@@ -12,6 +14,8 @@ import sys
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
+
+# Menggunakan model Gemini terbaru
 model = genai.GenerativeModel('gemini-3.5-flash')
 
 BLOG_ID = os.environ.get("BLOG_ID")
@@ -21,6 +25,11 @@ TOKEN_FILE = 'token.json'
 try:
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        
+        # Memperbarui token jika sudah kedaluwarsa
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            
         blogger_service = build('blogger', 'v3', credentials=creds)
         print("✅ Otentikasi Blogger berhasil.")
     else:
@@ -59,7 +68,7 @@ def ambil_riwayat_postingan():
             
         print(f"🔍 Sistem Anti-Duplikat aktif: Memeriksa {len(posts)} artikel terdahulu.")
     except Exception as e:
-        print(f"⚠️ Gagal mengambil riwayat artikel (Anti-duplikat mungkin kurang akurat): {e}")
+        print(f"⚠️ Gagal mengambil riwayat artikel: {e}")
         
     return riwayat_konten
 
@@ -72,6 +81,7 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
             for entry in feed.entries[:limit_per_sumber]:
                 gambar_url = ""
                 try:
+                    # 1. Coba ambil gambar asli dari RSS
                     if 'media_content' in entry and len(entry.media_content) > 0:
                         gambar_url = entry.media_content[0].get('url', '')
                     elif 'links' in entry:
@@ -81,8 +91,15 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
                                 break
                     elif 'media_thumbnail' in entry and len(entry.media_thumbnail) > 0:
                         gambar_url = entry.media_thumbnail[0].get('url', '')
-                except Exception:
-                    pass
+                        
+                    # 2. JIKA TIDAK ADA GAMBAR ASLI, MINTA AI MENGGAMBARNYA
+                    if not gambar_url:
+                        prompt_gambar = f"Professional sports news photography, dramatic lighting, illustration of: {entry.title}"
+                        prompt_aman = urllib.parse.quote(prompt_gambar)
+                        gambar_url = f"https://image.pollinations.ai/prompt/{prompt_aman}?width=800&height=400&nologo=true"
+                        print(f"  > Gambar asli tidak ada. AI membuat ilustrasi untuk judul ini.")
+                except Exception as e:
+                    print(f"  > Error saat memproses gambar: {e}")
 
                 berita = {
                     'judul': entry.title,
@@ -106,7 +123,7 @@ def tulis_artikel_dengan_gemini(berita):
     
     Syarat penulisan:
     1. Buat Judul baru yang clickbait tapi tidak menyesatkan.
-    2. Tulis isi artikel minimal 6 paragraf.
+    2. Tulis isi artikel minimal 8 paragraf.
     3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>) agar siap diposting di Blogger.
     4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
     5. Berikan kredit sumber berita di akhir artikel dengan format HTML link (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
@@ -151,9 +168,9 @@ def posting_ke_blogger(judul, konten_html):
 def main():
     print("=== Memulai Auto-Blogger Olahraga ===")
     
-    # Ambil riwayat artikel dari blog untuk anti-duplikat
+    # Ambil riwayat artikel untuk sistem anti-duplikat
     riwayat_postingan = ambil_riwayat_postingan()
-    link_sesi_ini = set() # Untuk menyimpan link yang baru diproses hari ini
+    link_sesi_ini = set() 
     
     daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=3)
     print(f"Ditemukan total {len(daftar_berita)} berita dari RSS.")
@@ -162,25 +179,23 @@ def main():
         print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita: {berita['judul']}")
         
         # --- CEK DUPLIKAT ---
-        # 1. Cek apakah link berita ini ada di artikel yang sudah diposting sebelumnya
         sudah_diposting = any(berita['link'] in konten for konten in riwayat_postingan)
-        
-        # 2. Cek apakah berita ini sudah diproses di sesi (hari) yang sama
         if sudah_diposting or (berita['link'] in link_sesi_ini):
             print("⏩ Melewati berita: Sudah pernah diposting (Duplikat).")
             continue
             
-        # Masukkan link ke sesi ini agar tidak diulang jika RSS lain memuat berita sama
         link_sesi_ini.add(berita['link'])
         # --------------------
 
         hasil_gemini = tulis_artikel_dengan_gemini(berita)
         
         if hasil_gemini:
+            # Membersihkan format sisa markdown
             baris_teks = hasil_gemini.split('\n')
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
+            # Memasukkan gambar ke bagian atas artikel HTML
             if berita['gambar']:
                 tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px;" /></div>\n'
                 konten_artikel = tag_gambar + konten_artikel
