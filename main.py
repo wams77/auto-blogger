@@ -12,9 +12,13 @@ import sys
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
+
+# Model sudah benar menggunakan versi 3.5
 model = genai.GenerativeModel('gemini-3.5-flash')
 
-BLOG_ID = os.environ.get("657637354060844621")
+# PERBAIKAN UTAMA: Panggil nama variabelnya saja, bukan angkanya
+BLOG_ID = os.environ.get("BLOG_ID") 
+
 SCOPES = ['https://www.googleapis.com/auth/blogger']
 TOKEN_FILE = 'token.json'
 
