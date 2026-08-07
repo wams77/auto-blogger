@@ -2,34 +2,31 @@ import os
 import time
 import feedparser
 import urllib.parse
-import google.generativeai as genai
+from groq import Groq 
 from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from google.api_core.exceptions import ResourceExhausted
 import sys
 
 # ==========================================
 # 1. KONFIGURASI KREDENSIAL & API
 # ==========================================
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Menggunakan model Gemini terbaru
-model = genai.GenerativeModel('gemini-3.5-flash')
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+groq_client = Groq(api_key=GROQ_API_KEY)
+GROQ_MODEL = "llama3-70b-8192" 
 
 BLOG_ID = os.environ.get("BLOG_ID")
 SCOPES = ['https://www.googleapis.com/auth/blogger']
 TOKEN_FILE = 'token.json'
+HISTORY_FILE = 'history.txt'
 
+# --- Inisialisasi Blogger API ---
 try:
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-        
-        # Memperbarui token jika sudah kedaluwarsa
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            
         blogger_service = build('blogger', 'v3', credentials=creds)
         print("✅ Otentikasi Blogger berhasil.")
     else:
@@ -39,7 +36,7 @@ except Exception as e:
     sys.exit(1)
 
 # ==========================================
-# 2. DAFTAR SUMBER RSS
+# 2. DAFTAR SUMBER RSS (OLAHRAGA UMUM)
 # ==========================================
 RSS_FEEDS = [
     "http://feeds.bbci.co.uk/sport/rss.xml",
@@ -51,26 +48,15 @@ RSS_FEEDS = [
 # ==========================================
 # 3. FUNGSI UTAMA
 # ==========================================
-def ambil_riwayat_postingan():
-    """Mengambil riwayat artikel di Blogger untuk mengecek duplikat."""
-    riwayat_konten = []
-    if not BLOG_ID:
-        return riwayat_konten
-        
-    try:
-        # Mengambil 20 postingan terakhir dari blog
-        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=20)
-        response = request.execute()
-        posts = response.get('items', [])
-        
-        for post in posts:
-            riwayat_konten.append(post.get('content', ''))
-            
-        print(f"🔍 Sistem Anti-Duplikat aktif: Memeriksa {len(posts)} artikel terdahulu.")
-    except Exception as e:
-        print(f"⚠️ Gagal mengambil riwayat artikel: {e}")
-        
-    return riwayat_konten
+def muat_riwayat_lokal():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+def simpan_riwayat_lokal(link):
+    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
+        f.write(f"{link}\n")
 
 def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
     semua_berita = []
@@ -80,8 +66,9 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
             feed = feedparser.parse(url)
             for entry in feed.entries[:limit_per_sumber]:
                 gambar_url = ""
+                link_asli = entry.get('link', entry.get('id', ''))
+                
                 try:
-                    # 1. Coba ambil gambar asli dari RSS
                     if 'media_content' in entry and len(entry.media_content) > 0:
                         gambar_url = entry.media_content[0].get('url', '')
                     elif 'links' in entry:
@@ -89,21 +76,18 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
                             if link.get('rel') == 'enclosure' and 'image' in link.get('type', ''):
                                 gambar_url = link.get('href', '')
                                 break
-                    elif 'media_thumbnail' in entry and len(entry.media_thumbnail) > 0:
-                        gambar_url = entry.media_thumbnail[0].get('url', '')
-                        
-                    # 2. JIKA TIDAK ADA GAMBAR ASLI, MINTA AI MENGGAMBARNYA
+                                
                     if not gambar_url:
-                        prompt_gambar = f"Professional sports news photography, dramatic lighting, illustration of: {entry.title}"
+                        print("  > Gambar asli tidak ada. Menyiapkan gambar AI...")
+                        prompt_gambar = f"High quality cinematic sports photography, dramatic lighting, illustration of: {entry.title}"
                         prompt_aman = urllib.parse.quote(prompt_gambar)
                         gambar_url = f"https://image.pollinations.ai/prompt/{prompt_aman}?width=800&height=400&nologo=true"
-                        print(f"  > Gambar asli tidak ada. AI membuat ilustrasi untuk judul ini.")
-                except Exception as e:
-                    print(f"  > Error saat memproses gambar: {e}")
+                except Exception:
+                    pass
 
                 berita = {
                     'judul': entry.title,
-                    'link': entry.link,
+                    'link': link_asli,
                     'deskripsi': entry.get('summary', entry.get('description', '')),
                     'gambar': gambar_url
                 }
@@ -112,64 +96,68 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
             print(f"Gagal membaca RSS {url}: {e}")
     return semua_berita
 
-def tulis_artikel_dengan_gemini(berita):
+def tulis_artikel_dengan_groq(berita):
     prompt = f"""
-    Bertindaklah sebagai jurnalis olahraga profesional. 
-    Tulis ulang berita olahraga berikut ke dalam bahasa Indonesia yang menarik, informatif, dan SEO friendly.
+    Bertindaklah sebagai jurnalis olahraga dan pandit profesional yang tajam, bersemangat, dan informatif. 
+    Tulis ulang berita olahraga berikut ke dalam bahasa Indonesia yang memancing rasa penasaran, mendalam, dan SEO friendly. 
     
-    Data Berita Asli:
+    Data Berita Asli (Bahasa Inggris):
     Judul: {berita['judul']}
     Deskripsi: {berita['deskripsi']}
     
     Syarat penulisan:
-    1. Buat Judul baru yang clickbait tapi tidak menyesatkan.
-    2. Tulis isi artikel minimal 8 paragraf.
-    3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>) agar siap diposting di Blogger.
+    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dengan isi berita dan tidak hoaks.
+    2. Tulis isi artikel minimal 4 paragraf dengan gaya bahasa asyik ala komentator olahraga.
+    3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>, <em>).
     4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
-    5. Berikan kredit sumber berita di akhir artikel dengan format HTML link (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
+    5. Berikan kredit sumber berita di akhir artikel (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
     """
     
     for attempt in range(3):
         try:
-            response = model.generate_content(prompt)
-            return response.text
-        except ResourceExhausted:
-            wait_time = (attempt + 1) * 30
-            print(f"⚠️ Limit API Gemini tercapai. Menunggu {wait_time} detik...")
-            time.sleep(wait_time)
+            chat_completion = groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=GROQ_MODEL,
+                temperature=0.7,
+            )
+            return chat_completion.choices[0].message.content
         except Exception as e:
-            print(f"Error saat memanggil Gemini: {e}")
-            return None
+            wait_time = (attempt + 1) * 30
+            print(f"⚠️ Error/Limit API Groq: {e}. Menunggu {wait_time} detik...")
+            time.sleep(wait_time)
             
-    print("Gagal membuat artikel setelah beberapa kali percobaan akibat limit API.")
     return None
 
 def posting_ke_blogger(judul, konten_html):
     if not BLOG_ID:
         print("❌ BLOG_ID tidak ditemukan!")
-        return
+        return False
 
     post_body = {
         'title': judul,
         'content': konten_html,
-        'labels': ['Berita Olahraga', 'Auto Update']
+        'labels': ['Berita Olahraga', 'Highlight Olahraga']
     }
     
     try:
         request = blogger_service.posts().insert(blogId=BLOG_ID, body=post_body)
         response = request.execute()
-        print(f"✅ Sukses memposting: {response.get('url')}")
+        post_url = response.get('url')
+        print(f"✅ Sukses memposting: {post_url}")
+        return True
     except Exception as e:
         print(f"❌ Gagal memposting ke Blogger: {e}")
+        return False
 
 # ==========================================
 # 4. EKSEKUSI PROGRAM
 # ==========================================
 def main():
-    print("=== Memulai Auto-Blogger Olahraga ===")
+    print("=== Memulai Auto-Blogger Olahraga (Didukung Groq AI) ===")
     
-    # Ambil riwayat artikel untuk sistem anti-duplikat
-    riwayat_postingan = ambil_riwayat_postingan()
+    riwayat_lokal = muat_riwayat_lokal()
+    print(f"📂 Ditemukan {len(riwayat_lokal)} riwayat di history.txt")
+    
     link_sesi_ini = set() 
     
     daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=3)
@@ -178,31 +166,43 @@ def main():
     for index, berita in enumerate(daftar_berita):
         print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita: {berita['judul']}")
         
-        # --- CEK DUPLIKAT ---
-        sudah_diposting = any(berita['link'] in konten for konten in riwayat_postingan)
-        if sudah_diposting or (berita['link'] in link_sesi_ini):
-            print("⏩ Melewati berita: Sudah pernah diposting (Duplikat).")
+        if not berita['link'] or len(berita['link']) < 5:
+            continue
+
+        # Cek duplikat lewat history lokal
+        if (berita['link'] in riwayat_lokal) or (berita['link'] in link_sesi_ini):
+            print("⏩ Melewati berita: Sudah diposting sebelumnya (Duplikat).")
             continue
             
         link_sesi_ini.add(berita['link'])
-        # --------------------
-
-        hasil_gemini = tulis_artikel_dengan_gemini(berita)
+        hasil_ai = tulis_artikel_dengan_groq(berita)
         
-        if hasil_gemini:
-            # Membersihkan format sisa markdown
-            baris_teks = hasil_gemini.split('\n')
+        if hasil_ai:
+            baris_teks = hasil_ai.split('\n')
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
-            # Memasukkan gambar ke bagian atas artikel HTML
+            tag_pelacak = f"\n"
+            konten_artikel = tag_pelacak + konten_artikel
+            
             if berita['gambar']:
-                tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px;" /></div>\n'
+                tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" /></div>\n'
                 konten_artikel = tag_gambar + konten_artikel
 
-            posting_ke_blogger(judul_baru, konten_artikel)
+            # Iklan
+            kode_iklan = """
+            <div style="margin-top: 30px; margin-bottom: 20px; text-align: center;">
+                <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5762789427984759" crossorigin="anonymous"></script>
+            </div>
+            """
+            konten_artikel = konten_artikel + kode_iklan
+
+            # Posting dan catat history
+            if posting_ke_blogger(judul_baru, konten_artikel):
+                simpan_riwayat_lokal(berita['link'])
+                riwayat_lokal.add(berita['link'])
             
-            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya (Anti-Limit)...")
+            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya...")
             time.sleep(20)
         else:
             print(f"Gagal di-generate, melewati artikel: {berita['judul']}")
