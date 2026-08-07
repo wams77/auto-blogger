@@ -1,13 +1,17 @@
-name: Auto Blogger Bot
+name: Auto Blogger Bot Olahraga
 
 on:
   schedule:
-    - cron: '0 1 * * *' # Berjalan otomatis setiap jam 01:00 UTC (jam 09:00 WITA)
-  workflow_dispatch: # Memungkinkan tombol "Run workflow" manual
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # PENTING: Memberikan izin untuk menyimpan history.txt
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -21,7 +25,7 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
 
-      - name: Buat file Token JSON
+      - name: Buat file Token JSON & Service Account
         env:
           BLOGGER_TOKEN: ${{ secrets.BLOGGER_TOKEN }}
         run: |
@@ -29,6 +33,15 @@ jobs:
 
       - name: Jalankan Script Auto-Blogger
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
         run: python main.py
+        
+      # Menyimpan riwayat agar besok tidak ada artikel ganda
+      - name: Simpan Riwayat History ke GitHub
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add history.txt
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update riwayat postingan olahraga [skip ci]"
+          git push
