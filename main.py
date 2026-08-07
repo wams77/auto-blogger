@@ -2,6 +2,8 @@ import os
 import time
 import feedparser
 import urllib.parse
+import requests  # <-- Tambahan library untuk Ping Sitemap
+from urllib.parse import urlparse
 from groq import Groq 
 from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
@@ -15,7 +17,6 @@ import sys
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# PERBAIKAN: Menggunakan model LLaMA 3.3 terbaru yang aktif di Groq
 GROQ_MODEL = "llama-3.3-70b-versatile" 
 
 BLOG_ID = os.environ.get("BLOG_ID")
@@ -36,6 +37,20 @@ try:
 except Exception as e:
     print(f"FATAL ERROR: Otentikasi Blogger Gagal: {e}")
     sys.exit(1)
+
+# --- Inisialisasi Indexing API ---
+INDEXING_SCOPES = ['https://www.googleapis.com/auth/indexing']
+INDEXING_KEY_FILE = 'service_account.json'
+indexing_service = None
+try:
+    if os.path.exists(INDEXING_KEY_FILE):
+        idx_creds = service_account.Credentials.from_service_account_file(INDEXING_KEY_FILE, scopes=INDEXING_SCOPES)
+        indexing_service = build('indexing', 'v3', credentials=idx_creds)
+        print("✅ Google Indexing API siap digunakan.")
+    else:
+        print("⚠️ File service_account.json tidak ditemukan. Melewati Indexing API.")
+except Exception as e:
+    print(f"⚠️ Gagal menginisialisasi Indexing API: {e}")
 
 # ==========================================
 # 2. DAFTAR SUMBER RSS (OLAHRAGA UMUM)
@@ -100,17 +115,21 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
 
 def tulis_artikel_dengan_groq(berita):
     prompt = f"""
-    Bertindaklah sebagai jurnalis olahraga dan pandit profesional yang tajam, bersemangat, dan informatif. 
-    Tulis ulang berita olahraga berikut ke dalam bahasa Indonesia yang memancing rasa penasaran, mendalam, dan SEO friendly. 
+    Bertindaklah sebagai jurnalis olahraga senior dan analis/pandit olahraga profesional. 
+    Tugas Anda tidak hanya menulis ulang berita, tetapi juga memberikan OPINI tajam dan ANALISIS berbasis DATA (sejarah, statistik, rekor, atau taktik) terkait topik tersebut dengan mengambil dari basis pengetahuan luas yang Anda miliki.
     
     Data Berita Asli (Bahasa Inggris):
     Judul: {berita['judul']}
     Deskripsi: {berita['deskripsi']}
     
     Syarat penulisan:
-    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dengan isi berita dan tidak hoaks.
-    2. Tulis isi artikel minimal 4 paragraf dengan gaya bahasa asyik ala komentator olahraga.
-    3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>, <em>).
+    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dan tidak hoaks.
+    2. Struktur Artikel (Minimal 5 Paragraf panjang):
+       - Pembukaan: Sampaikan inti berita dengan gaya bahasa asyik ala komentator olahraga.
+       - Fakta Utama: Elaborasi lebih lanjut dari deskripsi berita asli.
+       - Analisis Berbasis Data: [PENTING] Masukkan wawasan Anda sendiri terkait data historis, perbandingan statistik pemain/klub, rekor masa lalu, atau analisis taktis yang relevan dengan berita tersebut.
+       - Opini Pandit & Prediksi: Berikan argumen, pandangan pro/kontra, serta prediksi Anda tentang dampak peristiwa ini di masa depan.
+    3. Format artikel HARUS menggunakan tag HTML yang rapi (gunakan <h2> untuk sub-judul analisis/opini, <p> untuk paragraf, <strong> untuk penekanan data penting).
     4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
     5. Berikan kredit sumber berita di akhir artikel (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
     """
@@ -138,7 +157,7 @@ def posting_ke_blogger(judul, konten_html):
     post_body = {
         'title': judul,
         'content': konten_html,
-        'labels': ['Berita Olahraga', 'Highlight Olahraga']
+        'labels': ['Berita Olahraga', 'Analisis Olahraga', 'Opini Pandit']
     }
     
     try:
@@ -146,6 +165,34 @@ def posting_ke_blogger(judul, konten_html):
         response = request.execute()
         post_url = response.get('url')
         print(f"✅ Sukses memposting: {post_url}")
+        
+        # ==========================================
+        # FITUR SEO & INDEXING TINGKAT LANJUT
+        # ==========================================
+        if post_url:
+            # 1. Pastikan URL Canonical (Bersih tanpa ?m=1)
+            parsed_url = urlparse(post_url)
+            clean_url = f"https://{parsed_url.netloc}{parsed_url.path}"
+            
+            # 2. Submit ke Google Indexing API
+            if indexing_service:
+                try:
+                    notification = {'url': clean_url, 'type': 'URL_UPDATED'}
+                    indexing_service.urlNotifications().publish(body=notification).execute()
+                    print(f"🚀 [AUTO-INDEX] API berhasil submit URL Canonical ke Google.")
+                except Exception as idx_err:
+                    print(f"⚠️ [AUTO-INDEX] Gagal submit API: {idx_err}")
+            
+            # 3. Ping Google Sitemap (Trik Tambahan agar cepat dirayapi)
+            try:
+                sitemap_url = f"https://{parsed_url.netloc}/sitemap.xml"
+                ping_url = f"https://www.google.com/ping?sitemap={sitemap_url}"
+                res = requests.get(ping_url)
+                if res.status_code == 200:
+                    print(f"🎯 [SEO PING] Sukses memaksa Googlebot membaca ulang Sitemap!")
+            except Exception as e:
+                pass
+                
         return True
     except Exception as e:
         print(f"❌ Gagal memposting ke Blogger: {e}")
@@ -156,6 +203,7 @@ def posting_ke_blogger(judul, konten_html):
 # ==========================================
 def main():
     print("=== Memulai Auto-Blogger Olahraga (Didukung Groq AI LLaMA 3.3) ===")
+    print("✨ Fitur Analisis Pandit & Opini Berbasis Data AKTIF ✨")
     
     riwayat_lokal = muat_riwayat_lokal()
     print(f"📂 Ditemukan {len(riwayat_lokal)} riwayat di history.txt")
@@ -171,7 +219,6 @@ def main():
         if not berita['link'] or len(berita['link']) < 5:
             continue
 
-        # Cek duplikat lewat history lokal
         if (berita['link'] in riwayat_lokal) or (berita['link'] in link_sesi_ini):
             print("⏩ Melewati berita: Sudah diposting sebelumnya (Duplikat).")
             continue
@@ -191,7 +238,6 @@ def main():
                 tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" /></div>\n'
                 konten_artikel = tag_gambar + konten_artikel
 
-            # Iklan
             kode_iklan = """
             <div style="margin-top: 30px; margin-bottom: 20px; text-align: center;">
                 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5762789427984759" crossorigin="anonymous"></script>
@@ -199,7 +245,6 @@ def main():
             """
             konten_artikel = konten_artikel + kode_iklan
 
-            # Posting dan catat history
             if posting_ke_blogger(judul_baru, konten_artikel):
                 simpan_riwayat_lokal(berita['link'])
                 riwayat_lokal.add(berita['link'])
