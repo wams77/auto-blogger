@@ -53,14 +53,22 @@ except Exception as e:
     print(f"⚠️ Gagal menginisialisasi Indexing API: {e}")
 
 # ==========================================
-# 2. DAFTAR SUMBER RSS (OLAHRAGA UMUM)
+# 2. DAFTAR SUMBER RSS (3 KATEGORI SPESIFIK)
 # ==========================================
-RSS_FEEDS = [
-    "http://feeds.bbci.co.uk/sport/rss.xml",
-    "http://feeds.bbci.co.uk/sport/football/rss.xml",
-    "https://api.foxsports.com/v1/rss?partnerKey=zBaFxRyGKCfxBagJG9b8pqLyndmvo7UU",
-    "https://sports.yahoo.com/rss/"
-]
+RSS_FEEDS = {
+    "Sepak Bola": [
+        "https://news.google.com/rss/search?q=Sepak+Bola+OR+Liga+Inggris+OR+Liga+Champions+when:1d&hl=id&gl=ID&ceid=ID:id",
+        "https://feeds.bbci.co.uk/sport/football/rss.xml"
+    ],
+    "Bulu Tangkis": [
+        "https://news.google.com/rss/search?q=Bulu+Tangkis+OR+BWF+OR+Badminton+Indonesia+when:1d&hl=id&gl=ID&ceid=ID:id",
+        "https://www.antaranews.com/rss/olahraga/bulu-tangkis.xml"
+    ],
+    "Tinju": [
+        "https://news.google.com/rss/search?q=Tinju+Dunia+OR+Boxing+when:1d&hl=id&gl=ID&ceid=ID:id",
+        "https://www.boxingnews24.com/feed/"
+    ]
+}
 
 # ==========================================
 # 3. FUNGSI UTAMA
@@ -75,60 +83,63 @@ def simpan_riwayat_lokal(link):
     with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
         f.write(f"{link}\n")
 
-def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
+def dapatkan_berita_dari_rss(kategori_rss, limit_per_sumber=2):
     semua_berita = []
-    for url in rss_urls:
-        print(f"Membaca RSS dari: {url}")
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:limit_per_sumber]:
-                gambar_url = ""
-                link_asli = entry.get('link', entry.get('id', ''))
-                
-                try:
-                    if 'media_content' in entry and len(entry.media_content) > 0:
-                        gambar_url = entry.media_content[0].get('url', '')
-                    elif 'links' in entry:
-                        for link in entry.links:
-                            if link.get('rel') == 'enclosure' and 'image' in link.get('type', ''):
-                                gambar_url = link.get('href', '')
-                                break
-                                
-                    if not gambar_url:
-                        print("  > Gambar asli tidak ada. Menyiapkan gambar AI...")
-                        prompt_gambar = f"High quality cinematic sports photography, dramatic lighting, illustration of: {entry.title}"
-                        prompt_aman = urllib.parse.quote(prompt_gambar)
-                        gambar_url = f"https://image.pollinations.ai/prompt/{prompt_aman}?width=800&height=400&nologo=true"
-                except Exception:
-                    pass
+    for kategori, daftar_url in kategori_rss.items():
+        for url in daftar_url:
+            print(f"Membaca RSS [{kategori}] dari: {url}")
+            try:
+                feed = feedparser.parse(url)
+                for entry in feed.entries[:limit_per_sumber]:
+                    gambar_url = ""
+                    link_asli = entry.get('link', entry.get('id', ''))
+                    
+                    try:
+                        if 'media_content' in entry and len(entry.media_content) > 0:
+                            gambar_url = entry.media_content[0].get('url', '')
+                        elif 'links' in entry:
+                            for link in entry.links:
+                                if link.get('rel') == 'enclosure' and 'image' in link.get('type', ''):
+                                    gambar_url = link.get('href', '')
+                                    break
+                                    
+                        if not gambar_url:
+                            print("  > Gambar asli tidak ada. Menyiapkan gambar AI...")
+                            # Modifikasi prompt gambar agar sesuai kategorinya
+                            prompt_gambar = f"High quality cinematic {kategori} sports photography, dramatic lighting, illustration of: {entry.title}"
+                            prompt_aman = urllib.parse.quote(prompt_gambar)
+                            gambar_url = f"https://image.pollinations.ai/prompt/{prompt_aman}?width=800&height=400&nologo=true"
+                    except Exception:
+                        pass
 
-                berita = {
-                    'judul': entry.title,
-                    'link': link_asli,
-                    'deskripsi': entry.get('summary', entry.get('description', '')),
-                    'gambar': gambar_url
-                }
-                semua_berita.append(berita)
-        except Exception as e:
-            print(f"Gagal membaca RSS {url}: {e}")
+                    berita = {
+                        'judul': entry.title,
+                        'link': link_asli,
+                        'deskripsi': entry.get('summary', entry.get('description', '')),
+                        'gambar': gambar_url,
+                        'kategori': kategori # <-- Menyimpan label kategori olahraga
+                    }
+                    semua_berita.append(berita)
+            except Exception as e:
+                print(f"Gagal membaca RSS {url}: {e}")
     return semua_berita
 
 def tulis_artikel_dengan_groq(berita):
     prompt = f"""
-    Bertindaklah sebagai jurnalis olahraga senior dan analis/pandit olahraga profesional. 
-    Tugas Anda tidak hanya menulis ulang berita, tetapi juga memberikan OPINI tajam dan ANALISIS berbasis DATA (sejarah, statistik, rekor, atau taktik) terkait topik tersebut dengan mengambil dari basis pengetahuan luas yang Anda miliki.
+    Bertindaklah sebagai jurnalis olahraga senior dan analis/pandit profesional. 
+    Tugas Anda tidak hanya menulis ulang berita, tetapi juga memberikan OPINI tajam dan ANALISIS berbasis DATA terkait cabang olahraga {berita['kategori']} dengan mengambil dari basis pengetahuan luas yang Anda miliki.
     
-    Data Berita Asli (Bahasa Inggris):
+    Data Berita Asli (Terjemahkan ke Indonesia jika dari bahasa asing):
     Judul: {berita['judul']}
     Deskripsi: {berita['deskripsi']}
     
     Syarat penulisan:
     1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dan tidak hoaks.
     2. Struktur Artikel (Minimal 5 Paragraf panjang):
-       - Pembukaan: Sampaikan inti berita dengan gaya bahasa asyik ala komentator olahraga.
+       - Pembukaan: Sampaikan inti berita dengan gaya bahasa asyik ala komentator {berita['kategori']}.
        - Fakta Utama: Elaborasi lebih lanjut dari deskripsi berita asli.
-       - Analisis Berbasis Data: [PENTING] Masukkan wawasan Anda sendiri terkait data historis, perbandingan statistik pemain/klub, rekor masa lalu, atau analisis taktis yang relevan dengan berita tersebut.
-       - Opini Pandit & Prediksi: Berikan argumen, pandangan pro/kontra, serta prediksi Anda tentang dampak peristiwa ini di masa depan.
+       - Analisis Berbasis Data: [PENTING] Masukkan wawasan Anda sendiri terkait data historis, perbandingan statistik, rekor masa lalu, atau analisis taktis yang relevan dengan berita tersebut.
+       - Opini Pandit & Prediksi: Berikan argumen, pandangan pro/kontra, serta prediksi Anda tentang dampak peristiwa ini ke depannya.
     3. Format artikel HARUS menggunakan tag HTML yang rapi (gunakan <h2> untuk sub-judul analisis/opini, <p> untuk paragraf, <strong> untuk penekanan data penting).
     4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
     5. Berikan kredit sumber berita di akhir artikel (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
@@ -149,22 +160,23 @@ def tulis_artikel_dengan_groq(berita):
             
     return None
 
-def posting_ke_blogger(judul, konten_html):
+def posting_ke_blogger(judul, konten_html, kategori_olahraga):
     if not BLOG_ID:
         print("❌ BLOG_ID tidak ditemukan!")
         return False
 
+    # Label akan otomatis menyesuaikan dengan Kategori Berita
     post_body = {
         'title': judul,
         'content': konten_html,
-        'labels': ['Berita Olahraga', 'Analisis Olahraga', 'Opini Pandit']
+        'labels': [kategori_olahraga, 'Berita Olahraga', 'Opini Pandit']
     }
     
     try:
         request = blogger_service.posts().insert(blogId=BLOG_ID, body=post_body)
         response = request.execute()
         post_url = response.get('url')
-        print(f"✅ Sukses memposting: {post_url}")
+        print(f"✅ Sukses memposting dengan Label '{kategori_olahraga}': {post_url}")
         
         # ==========================================
         # FITUR SEO & INDEXING TINGKAT LANJUT
@@ -183,7 +195,7 @@ def posting_ke_blogger(judul, konten_html):
                 except Exception as idx_err:
                     print(f"⚠️ [AUTO-INDEX] Gagal submit API: {idx_err}")
             
-            # 3. Ping Google Sitemap (Trik Tambahan agar cepat dirayapi)
+            # 3. Ping Google Sitemap
             try:
                 sitemap_url = f"https://{parsed_url.netloc}/sitemap.xml"
                 ping_url = f"https://www.google.com/ping?sitemap={sitemap_url}"
@@ -202,7 +214,7 @@ def posting_ke_blogger(judul, konten_html):
 # 4. EKSEKUSI PROGRAM
 # ==========================================
 def main():
-    print("=== Memulai Auto-Blogger Olahraga (Didukung Groq AI LLaMA 3.3) ===")
+    print("=== Memulai Auto-Blogger Olahraga (Fokus: Sepak Bola, Bulu Tangkis, Tinju) ===")
     print("✨ Fitur Analisis Pandit & Opini Berbasis Data AKTIF ✨")
     
     riwayat_lokal = muat_riwayat_lokal()
@@ -210,11 +222,12 @@ def main():
     
     link_sesi_ini = set() 
     
-    daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=3)
+    # Mengambil berita menggunakan format Dictionary Kategori
+    daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=2)
     print(f"Ditemukan total {len(daftar_berita)} berita dari RSS.")
     
     for index, berita in enumerate(daftar_berita):
-        print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita: {berita['judul']}")
+        print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita [{berita['kategori']}]: {berita['judul']}")
         
         if not berita['link'] or len(berita['link']) < 5:
             continue
@@ -231,7 +244,8 @@ def main():
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
-            tag_pelacak = f"\n"
+            # PERBAIKAN BUG: Tag Pelacak sudah dikembalikan agar tidak terjadi duplikat!
+            tag_pelacak = f"<!-- PELACAK_SUMBER: {berita['link']} -->\n"
             konten_artikel = tag_pelacak + konten_artikel
             
             if berita['gambar']:
@@ -245,7 +259,8 @@ def main():
             """
             konten_artikel = konten_artikel + kode_iklan
 
-            if posting_ke_blogger(judul_baru, konten_artikel):
+            # Menyisipkan Label Kategori ke fungsi posting
+            if posting_ke_blogger(judul_baru, konten_artikel, berita['kategori']):
                 simpan_riwayat_lokal(berita['link'])
                 riwayat_lokal.add(berita['link'])
             
